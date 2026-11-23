@@ -1,0 +1,6 @@
+*.log
+recruit-save.json
+run-*.json
+launcher-error.txt
+*-test.flag
+*.png
