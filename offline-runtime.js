@@ -1,0 +1,8 @@
+let done=false,busy=false;
+Process.attachModuleObserver({onAdded(m){if(m.name.toLowerCase()!=='xlua.dll')return;
+const exp=n=>m.getExportByName(n);
+const top=new NativeFunction(exp('lua_gettop'),'int',['pointer']);
+const settop=new NativeFunction(exp('lua_settop'),'void',['pointer','int']);
+const load=new NativeFunction(exp('luaL_loadbuffer'),'int',['pointer','pointer','uint64','pointer']);
+const call=new NativeFunction(exp('lua_pcall'),'int',['pointer','int','int','int']);
+let replaced=false;const replacement=File.readAllBytes('C:/Users/Administrator/Documents/Codex/2026-11-22/1-2-rea-3-4-computeruse/outputs/offline-login/cached-bootstrap.ljbc');const rp=Memory.alloc(replacement.byteLength);rp.writeByteArray(replacement);Interceptor.attach(exp('xluaL_loadbuffer'),{onEnter(a){try{const n=a[3].readCString();if(!replaced && (n==='LuaPatcherMain'||n==='@LuaPatcherMain')){replaced=true;a[1]=rp;a[2]=ptr(replacement.byteLength);send({event:'cached_startup_installed',name:n});}}catch(e){send({error:String(e)});}}});Interceptor.attach(exp('xluaL_loadbuffer'),{onEnter(a){this.L=a[0];this.run=false;if(busy||done)return;try{const n=a[3].readCString();if(n==='@UI/Control/LoginUI'){done=true;this.run=true;}}catch(e){}},onLeave(){if(!this.run)return;busy=true;let t=top(this.L);try{const bytes=File.readAllBytes('C:/Users/Administrator/Documents/Codex/2026-11-22/1-2-rea-3-4-computeruse/outputs/offline-login/local-account.ljbc');const s=Memory.alloc(bytes.byteLength);s.writeByteArray(bytes);let rc=load(this.L,s,bytes.byteLength,Memory.allocUtf8String('@local_read_only_loader'));if(rc===0)rc=call(this.L,0,0,0);send({event:'loader_probe',rc});}catch(e){send({event:'probe_error',error:String(e)});}finally{settop(this.L,t);busy=false;}}});}});

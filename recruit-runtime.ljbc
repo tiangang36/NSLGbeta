@@ -1,0 +1,250 @@
+LJ·Treturn function(a,root,emit)
+ math.randomseed(os.time());local E=assert(loadfile(root..'recruit-engine.ljbc'))()
+ local pools={};local by={}
+ for _,cfg in pairs(package_package) do
+  if type(cfg)=='table' and cfg.ID and cfg.money_id then
+   local cards={};for _,c in pairs(package_package_cards) do if c.name==cfg.package_id then
+ if c.card_type==1 and heros_heros[c.card_id] then cards[#cards+1]={id=c.card_id,kind=1,quality=heros_heros[c.card_id].quality}
+ elseif c.card_type==2 and skills_skills[c.card_id] then cards[#cards+1]={id=c.card_id,kind=2,quality=skills_skills[c.card_id].quality+2} end end end
+   if #cards>0 and not by[cfg.ID] then local p={id=cfg.ID,cfg=cfg,cards=cards};pools[#pools+1]=p;by[p.id]=p end
+  end
+ end
+ local qs={};for _,p in ipairs(pools)do for _,c in ipairs(p.cards)do local k=c.kind..':'..tostring(c.quality);qs[k]=(qs[k]or 0)+1 end end;for k,v in pairs(qs)do emit('RARITY_VALUE '..k..' count='..v)end
+ table.sort(pools,function(x,y)return x.id<y.id end)
+ local s=E.new(pools,1000000);assert(#pools>1,'No usable client pools');local selected=1;local last='Rates 8/30/62; hero/skill 50/50; gold within 20';local names={}
+ local function name(id,kind)local skill=kind==CommonConst.RecruitCardType.Skill;local c=(skill and skills_skills or heros_heros)[id];return (skill and '[Skill] ' or '[Hero] ')..tostring(c and c.name or id)end
+ local function save()local f=assert(io.open(root..'recruit-save.json','w'));f:write(rapidJson.encode({balance=s.balance,selected=s.selected,inventory=(function()local r={};for k,v in pairs(s.inventory)do r[tostring(k)]=v end;return r end)(),history=s.history,nextId=s.nextId,pity=s.pity,rulesVersion=2}));f:close()end
+ local f=io.open(root..'recruit-save.json','r');if f then local ok,d=pcall(rapidJson.decode,f:read('*a'));f:close();if ok and type(d)=='table' then s.pity=d.pity or {};s.balance=d.balance or s.balance;s.inventory={};for _,c in ipairs(d.history or {})do local key=tostring(c.cardType)..':'..tostring(c.cardID);s.inventory[key]=(s.inventory[key] or 0)+1 end;s.history=d.history or {};s.nextId=d.nextId or s.nextId;s:select(d.selected);for i,p in ipairs(pools)do if p.id==s.selected then selected=i end end end end
+ local packages={};for _,p in ipairs(pools) do local c=p.cfg;packages[#packages+1]={packageId=p.id,packageType=c.type,guaranteedCount=0,lastFreeTime=0,lastDiscountTime=0,totaldDrawCount=0,openTimestamp=1,mergedPackageIds={},blacklist={},banCard={},selectList={},wishList={},wishGuaranteed=0,remainExchangeTime=0,midCount=0,seasonExchangeTime=0} end
+ a:InitRecruitLoginData({RecruitComp={packageList=packages}});rawset(a,'GetGlobalMinHeroLevel',function()return 1 end)
+ rawset(a,'CheckMingJiangCanFree',function()return false end);rawset(a,'CheckMingJiangCanDiscount',function()return false end)
+ rawset(a,'GetNextGuaranteedCount',function(self,id)return 20-(s.pity[tostring(id)]or 0)end)
+ local complete=0;for _,p in ipairs(pools)do if p.complete then complete=complete+1 end end;emit('WEIGHTED_READY complete='..complete..' total='..#pools)
+ local oldMoney=a.GetMoneyById;rawset(a,'GetMoneyById',function(self,id,...)if id==7 then return s.balance end;return oldMoney(self,id,...)end)
+ local function refresh()pcall(function()GameEvent:Fire('ON_MONEY_CHANGED')end)end
+ local function grant(cards)
+  for _,c in ipairs(cards) do
+   if c.cardType==CommonConst.RecruitCardType.Skill then
+    local data={skillId=c.cardID,level=1,userList={},orderLevel=0,skillSkinInfo={},customComp={},featureCacheList={},stateList={}}
+    local ok,e=xpcall(function()a:RPCNotifySkillResponse(0,{skillList={data}});assert(a:GetAvatarSkillBySkillID(c.cardID),'Missing skill')end,debug.traceback);emit('SKILL_GRANT '..c.cardID..' '..tostring(ok)..' '..tostring(e))
+   else
+   local cfg=heros_heros[c.cardID]
+   local data={ID=c.cardUniqueID,heroID=c.cardID,level=1,index=c.cardUniqueID,exp=0,wound_num=0,max_troop_num=100,army_troop_num=0,troop_num=0,skillList={},buff_list={},heroAPData={},evolutionLevel=0,wakeupIDList={},warbookLock={},energy=100,exEnergy=0,energyRTime=os.time(),lUEnergyTimes=0,heroStateList={},equipments={},armsAdvancedSkillList={},extraAPPointData={},heroSkinInfo={},enlighten=0,knotFate=0,groupSwitch=0,proposeFeatures={},customFeatures={},customAttr={},customTalents={},armsAdvancedId=0,validEndTime=0}
+   local ok,e=xpcall(function()a:RPCNotifyHeroResponse(0,{heroList={data}})end,debug.traceback);emit('HERO_GRANT '..c.cardID..' '..tostring(ok)..' '..tostring(e))
+   end
+  end
+ end
+ grant(s.history);emit('RESTORED_HERO_COUNT '..tostring(#a.heroList))
+
+ local function draw(id,count)
+  local cards,e=s:draw(id,count);if not cards then last=e;emit('RECRUIT_REJECT '..tostring(e));return end
+  grant(cards);local d=a:GetPackageData(id);if d then d.totaldDrawCount=d.totaldDrawCount+count;d.guaranteedCount=s.pity[tostring(id)]or 0 end
+  local text={};for _,c in ipairs(cards)do text[#text+1]=tostring(name(c.cardID,c.cardType)) end;last=table.concat(text,' / ');save();refresh();emit('LOCAL_DRAW pool='..id..' count='..count..' balance='..s.balance..' '..last)
+  local ok,e=xpcall(function()local r=UIMgr:GetUIByName('RecruitHeroUI');if r and r:IsShow() then r:SetPackageId(id);r:ShowGetCard(cards) else UIMgr:ShowUI('RecruitHeroUI',function(ui)ui:SetPackageId(id);ui:SetInitCards(cards)end)end end,debug.traceback);emit('RECRUIT_ANIMATION '..tostring(ok)..' '..tostring(e))
+  return cards
+ end
+ rawset(a,'ClientReqRecruit',function(self,id,count)return draw(id,count or 1)end);rawset(a,'RPCRecruit',function(self,id,count)return draw(id,count or 1)end);rawset(a,'RPCGetRecruitInfo',function()emit('LOCAL_RECRUIT_INFO')end)
+ local U=CS.UnityEngine;local UI=U.UI;local go=U.GameObject('OfflineRecruitGM');U.Object.DontDestroyOnLoad(go);local canvas=go:AddComponent(typeof(U.Canvas));canvas.renderMode=U.RenderMode.ScreenSpaceOverlay;canvas.sortingOrder=32760;go:AddComponent(typeof(UI.GraphicRaycaster));local scaler=go:AddComponent(typeof(UI.CanvasScaler));scaler.uiScaleMode=UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;scaler.referenceResolution=U.Vector2(1280,720)
+ local font=U.Resources.GetBuiltinResource(typeof(U.Font),'Arial.ttf')
+ local function obj(n,x,y,w,h,parent)local g=U.GameObject(n);g.transform:SetParent(parent or go.transform,false);local r=g:AddComponent(typeof(U.RectTransform));r.anchorMin=U.Vector2(0,1);r.anchorMax=U.Vector2(0,1);r.pivot=U.Vector2(0,1);r.anchoredPosition=U.Vector2(x,-y);r.sizeDelta=U.Vector2(w,h);return g end
+ local panel=obj('GM Panel',10,70,460,305);local bg=panel:AddComponent(typeof(UI.Image));bg.color=U.Color(0.06,0.07,0.1,0.96)
+ local function label(n,x,y,w,h)local g=obj(n,x,y,w,h,panel.transform);local t=g:AddComponent(typeof(UI.Text));t.font=font;t.fontSize=17;t.color=U.Color.white;t.supportRichText=false;t.raycastTarget=false;return t end
+ local title=label('Title',10,5,440,27);title.text='OFFLINE GM - 8/30/62 - pity 20'
+ local poolText=label('Pool',10,37,440,45);local balance=label('Balance',10,84,440,25);local result=label('Results',10,193,440,105)
+ local hitButtons={}
+ local function button(n,x,y,w,fn,parent)local g=obj(n,x,y,w,32,parent or panel.transform);local im=g:AddComponent(typeof(UI.Image));im.color=U.Color(0.25,0.3,0.4,1);local b=g:AddComponent(typeof(UI.Button));b.targetGraphic=im;local child=obj(n..' Text',0,0,w,32,g.transform);local t=child:AddComponent(typeof(UI.Text));t.raycastTarget=false;t.font=font;t.fontSize=16;t.color=U.Color.white;t.alignment=U.TextAnchor.MiddleCenter;t.text=n;hitButtons[#hitButtons+1]={rect=g:GetComponent(typeof(U.RectTransform)),name=n,run=fn};return b end
+ local function update()local p=pools[selected];poolText.text='Pool '..p.id..' / group '..p.cfg.package_id..' / season '..table.concat(p.cfg.season or {},'-')..' / total '..#p.cards;balance.text='Local gold: '..s.balance..'   Saved draws: '..#s.history;result.text=last end
+ local function selectPool(i)
+ selected=i;s:select(pools[i].id);save();local ui=UIMgr:GetUIByName('RecruitUI');if ui and ui:IsShow()then ui.nowSelectCardPackageId=s.selected;ui:RefreshPanelData()end;update();emit('GM_POOL '..s.selected..' group='..pools[i].cfg.package_id)
+ end
+ button('Prev pool',10,114,105,function()selectPool((selected-2)%#pools+1)end)
+ button('Next pool',125,114,105,function()selectPool(selected%#pools+1)end)
+ button('+100000',240,114,100,function()s:setBalance(s.balance+100000);save();refresh();update()end)
+ button('Draw 1',10,154,105,function()draw(s.selected,1);update()end)
+ button('Draw 5',125,154,105,function()draw(s.selected,5);update()end)
+ button('Open recruit',240,154,200,function()UIMgr:ShowUI('RecruitUI');update()end)
+ local visible=true;button('GM',10,28,65,function()visible=not visible;panel:SetActive(visible)end,go.transform)
+ update();emit('GM_READY pools='..#pools..' balance='..s.balance)
+ local smoke=io.open(root..'recruit-smoke.flag','r');local testing=smoke~=nil;if smoke then smoke:close() end;local ticks=0
+ local testFlag=io.open(root..'mixed-test.flag','r');local mixedTest=testFlag~=nil;if testFlag then testFlag:close()end
+ local function tick()
+  ticks=ticks+1
+  if mixedTest and ticks==240 then
+   for _,p in ipairs(pools)do local h,k=0,0;for _,c in ipairs(p.cards)do if c.kind==CommonConst.RecruitCardType.Skill then k=k+1 else h=h+1 end end;if h>0 and k>0 then emit('MIXED_TEST_POOL '..p.id..' heroes='..h..' skills='..k);draw(p.id,20);break end end
+  end
+  if U.Input.GetMouseButtonUp(0) then
+   local pos=U.Input.mousePosition
+   for i=#hitButtons,1,-1 do local b=hitButtons[i];if b.rect.gameObject.activeInHierarchy and U.RectTransformUtility.RectangleContainsScreenPoint(b.rect,U.Vector2(pos.x,pos.y),nil)then
+    emit('GM_MOUSE '..b.name);local ok,e=xpcall(b.run,debug.traceback);if not ok then emit('GM_ERROR '..tostring(e))end;break
+   end end
+  end
+  if ticks%60==0 then
+   local ui=UIMgr:GetUIByName('RecruitUI');if ui and ui:IsShow() and ui.nowSelectCardPackageId~=s.selected and by[ui.nowSelectCardPackageId]then
+    for i,p in ipairs(pools)do if p.id==ui.nowSelectCardPackageId then selected=i;s:select(p.id);save();emit('UI_POOL '..p.id..' group='..p.cfg.package_id);break end end
+   end;update()
+  end
+  if not testing then return end
+  local action=({[240]='Next pool',[300]='+100000',[360]='Draw 1',[420]='Draw 5',[540]='Open recruit'})[ticks]
+  if action then emit('SMOKE_CLICK '..action);local g=go.transform:Find('GM Panel/'..action);assert(g,'Missing GM button');g:GetComponent(typeof(UI.Button)).onClick:Invoke() end
+  if ticks==660 then local ui=UIMgr:GetUIByName('RecruitUI');emit('ORIGINAL_DRAW_BUTTON');if ui then ui:OnBtn5BtnClick() end end
+  
+  if ticks==480 or ticks==1500 then U.ScreenCapture.CaptureScreenshot(root..'recruit-smoke-'..ticks..'.png');emit('SMOKE_STATE balance='..s.balance..' history='..#s.history..' selected='..s.selected) end
+ end
+ return {state=s,draw=draw,update=update,root=go,tick=tick}
+end
+
+>    9  9   XÄ+ XÄ+ L id        x  	y  	 î  	 7 6  99 XÄ+ XÄ+   XÄ6   XÄ6 8   XÄ' XÄ' 6   XÄ9  XÄ  B&L 	nametostring[Hero] [Skill] heros_herosskills_skills
+SkillRecruitCardTypeCommonConst                              id  kind  skill 	c  ~  	 % 4   6  -  9BHÄ6  B< FR˙L   tostringinventory
+pairs             s r   k v   è 	 &2 6   6 9-  ' &' B A    9 6 95	 - 9=- 9
+=
+3 B=- 9=- 9=- 9=B A  9 BK  ¿¿
+close	pitynextIdhistoryinventory selected history selected inventory balance rulesVersion	pity nextId balanceencoderapidJson
+writewrecruit-save.json	openioassert                                      root s f 
+       )  L           +  L           +  L     a  -  9 6  B8  XÄ)   L ¿tostring	pity(           s self  id   a
+" 	  XÄ-  9 L -    G C ¿¿balance          s oldMoney self  id   I     6     9  ' B K  ON_MONEY_CHANGED	FireGameEvent       &    6   3 B K   
+pcall     ·    -     9   )  5 4 - >=B 6  -   9- 9B' B K    ¿¿Missing skillcardIDGetAvatarSkillBySkillIDassertskillList skillList RPCNotifySkillResponse                    a data c  y   ! -     9   )  5 4 - >=B K    ¿heroList heroList RPCNotifyHeroResponse           a data  ¥- k≤6    BXdÄ96 99 X Ä5 9=4  =4  =	4  =
+4  =4  =6 3	 6
+ 9
+
+B-	 ' 9' 6  B' 6  B&B	2=Ä6 985 9=9=9=4  =4  =4  =4  =4  =6 9 B=!4  ="4  =#4  =$4  =%4  =&4  ='4  =(4  =)4  =*6 3
++ 6 9B-
+ ', 9' 6  B' 6 	 B&B
+2 Ä2 ÄERöK   ¿¿HERO_GRANT  customTalentscustomAttrcustomFeaturesproposeFeaturesheroSkinInfoextraAPPointDataarmsAdvancedSkillListequipmentsheroStateListenergyRTime	timeoswarbookLockwakeupIDListheroAPDatabuff_listskillList
+indexheroIDID !exp ID validEndTime armsAdvancedId customTalents customAttr customFeatures proposeFeatures groupSwitch knotFate enlighten heroSkinInfo extraAPPointData armsAdvancedSkillList equipments heroStateList lUEnergyTimes energyRTime exEnergy energydwarbookLock wakeupIDList evolutionLevel heroAPData buff_list troop_num army_troop_num max_troop_numdwound_num 
+index heroID skillList 
+levelcardUniqueIDheros_herostostring SKILL_GRANT traceback
+debug xpcallstateListfeatureCacheListcustomCompskillSkinInfouserListskillId orderLevel userList 
+levelskillId stateList featureCacheList customComp skillSkinInfo cardID
+SkillRecruitCardTypeCommonConstcardTypeipairs	a emit cards  lg g g_ cc  cdata ok e  cfg 9data 'ok e   d  	+   9  -  B  9 - BK     SetInitCardsSetPackageId         id cards ui  
+   *+ 6     9  ' B    XÄ  9 B  X	Ä  9 -  B  9 - BXÄ6   9' 3 BK   ¿¿ ShowUIShowGetCardSetPackageIdIsShowRecruitHeroUIGetUIByName
+UIMgr                            id cards r  ∏a∆'-   9    B  X	Ä. - ' 6 	 B&B2 OÄ-  B-  9  B  XÄ9 =-  96   B8  XÄ)  =4  6  BX		Ä  6 - 9
+9	
+B A <E	R	ı6
+ 9 '	 B. - B- B- ' 	  '
+  ' -  9' - &B6 3 6	 9		B- '
+ 6  B' 6  B&
+
+B2  ÄL K  ¿	Ä¿¿ ¿¿¿¿RECRUIT_ANIMATION traceback
+debug xpcall balance balance= count=LOCAL_DRAW pool= / concat
+tablecardTypecardIDipairs	pityguaranteedCounttotaldDrawCountGetPackageDatatostringRECRUIT_REJECT 	draws last emit grant a name save refresh id  acount  acards Ze  Zd Gtext 7  _ 	c  	ok &e   D    . -    XÄ) D ¿      draw self  id  count   D    . -    XÄ) D ¿      draw self  id  count   9   
+. -   '  B K  ¿LOCAL_RECRUIT_INFO    emit  ∂  3^1 -  9   B9	 9
+ X
+Ä-
+ 9
+
++ B	 96
+ -  9B
+ A-  9)
+  ) B=-  9)
+  ) B=-  9)
+  ) B=	-  9
+  B=
+-  9
+  B=L ¿¿sizeDeltaanchoredPosition
+pivotanchorMaxVector2anchorMinRectTransformtypeofAddComponentSetParenttransformGameObject                                                   U go n  4x  4y  4w  4h  4parent  4g /r  ∑  N3 -     	 
+  - 9 B 96	 - 9B	 A- =) =- 99=+ =	+ =
+L ¿¿¿¿¿raycastTargetsupportRichText
+white
+Color
+colorfontSize	font	TexttypeofAddComponenttransform                             obj panel UI font U n  x  y  w  h  g 
+t  ˛ S™7 -    	 
+  )   XÄ- 9 B	 96
+ - 9B
+ A- 9*
+  * * ) B=
+ 96 - 9B A=-	    ' &)  )   )  9 B		 9
+	6 - 9	B A
++ =
+
+- =
+) =
+- 99=
+- 99=
+= 
+- -  5  96 - 9B A== =<L ¿¿¿¿¿"¿run	name	rect 	rect run 	name RectTransformGetComponent	textMiddleCenterTextAnchoralignment
+whitefontSize	fontraycastTarget	Text
+ TexttargetGraphicButton
+Color
+color
+ImagetypeofAddComponenttransformÄÄ¿˛ÁÃô≥≥ÊÃ˛µÊÃôô≥Ê˛                                                                                   obj panel UI U font hitButtons n  Tx  Ty  Tw  Tfn  Tparent  Tg Him Ab 2child 't   è   &Y8 -   - 8  - ' 9 ' 9 9' 6 99	 9			 	 X
+Ä4	  '
+
+ B' 9	 		 &	= - ' - 9' - 9 &= - - = K  ¿Ä¿ ¿¿!¿	Ähistory   Saved draws: balanceLocal gold: 
+cards / total -seasonconcat
+table / season package_idcfg / group id
+Pool 	text                                      pools selected poolText balance s result last p # í  *V9.   -  9 - 8 9B- B6  9' B  XÄ 9B  XÄ- 9= 9B- B- '	 - 9'
+ - 8 99&BK  Ä¿¿¿$¿¿package_idcfg group=GM_POOL RefreshPanelDataselectednowSelectCardPackageIdIsShowRecruitUIGetUIByName
+UIMgridselectselected s pools save update emit i  +ui  Z   	$< -   -  -  $B K  %¿Ä¿         selectPool selected pools  T   #= -   - -  $ B K  %¿Ä¿        selectPool selected pools  Ö  %> -     9   -  9 B -  B -  B -  B K  ¿¿¿$¿balancesetBalance¿ö              s save refresh update  P   ? -   - 9 ) B -  B K  ¿¿$¿selected        draw s update  P   @ -   - 9 ) B -  B K  ¿¿$¿selected        draw s update  S   A 6     9  ' B -   B K  $¿RecruitUIShowUI
+UIMgr        update  T   	B -      .   -    9   -  B K  &Ä¿SetActive         visible panel  °  ?ı¬F-      .   -     X.Ä-   	  X +Ä6   - B X%Ä)  )  6  9	BX
+	Ä96 99 XÄ XÄ E
+R
+ı)   XÄ)   XÄ- '	 9
+'  '	  &		B- 9	)
+ BX ÄERŸ-  9 
+ 9  )  B    X1Ä-  9 
+ 9  -  ) )ˇˇM)Ä- 8999  X!Ä- 999-	 9		9 9 B	+
+  B  XÄ- ' 9	&	B6 96	 9		B  X	Ä- '
+ 6  B&
+
+BXÄO◊-     	  X 3Ä6    9  ' B    X*Ä  9  B  X%Ä9! - 9" X Ä- 9! 8  XÄ6  - BXÄ99!  XÄ.	 -  9#9	B-
+ B- '$ 9	'
+% 9&9'&BXÄERÈ- B-     X ÄK  5 ( -  8     XÄ- ')   &B- 9* 9+',   &B6-  '. B 9/60 - 91B A92 93B-  	 XÄ6  9' B- '4 B  XÄ 95B-   XÄ-  	 XÄ- 9697- '8 -  '9 &B- ': - 9;'< - 9= '> - 9"&BK  )Ä+¿¿¿¿¿"¿¿¿Ä¿$¿(¿¿¿¿ selected=history history=balanceSMOKE_STATE balance=	.pngrecruit-smoke-CaptureScreenshotScreenCaptureOnBtn5BtnClickORIGINAL_DRAW_BUTTONInvokeonClickButtontypeofGetComponentMissing GM buttonassertGM Panel/	FindtransformSMOKE_CLICK   ÄÄÀÉ+100000 ÄÄ∏ÉNext pool Ä¿ÉÑOpen recruit ÄÄÈÉDraw 5 ÄÄ⁄ÉDraw 1package_idcfg group=UI_POOL selectselectednowSelectCardPackageIdIsShowRecruitUIGetUIByName
+UIMgrtostringGM_ERROR traceback
+debugrunxpcall	nameGM_MOUSE yxVector2!RectangleContainsScreenPointRectTransformUtilityactiveInHierarchygameObject	rectmousePositionGetMouseButtonUp
+Input skills= heroes=idMIXED_TEST_POOL 
+SkillRecruitCardTypeCommonConst	kind
+cardsipairs‡x ®
+¿∏ticks mixedTest pools emit draw U hitButtons s by selected save update testing go UI root ( ( (_ %p  %h #k  #  _ 	c  	pos +.* * *i (b &ok 
+e  
+ui .  i p  action  Kg ui  ˇ(/ £∏˛]6  96 9B A 6 6  ' &B A B4  4  6 6 BH	PÄ6	 
+ B
+ XKÄ9
+  XHÄ9
+  XEÄ4  6 6 BH,Ä99
+ X(Ä9	  XÄ6 98  XÄ  5 9=6 989=<XÄ9	 XÄ6 98  XÄ  5 9=6 989=<FR“ )   XÄ9
+8  X
+Ä5 9
+==
+=  <9<F	R	Æ4  6 	 BX
+Ä6 9BXÄ9' 6 9B&8  XÄ)   <ERÚE
+R
+Ï6 	 BH
+Ä ' 
+ '   &BF
+R
+˜6
+ 9!	 3
+" B9#	 *
+ B6 
+ )  
+ X
+Ä+
+ XÄ+
+ '$ B) '	% 4
+  3& 3' 6( 9) '* &'+ B  XPÄ6, 6- 9. 9/'0 B A 91B  XCÄ6	  B
+ X>Ä92  XÄ4  =293  XÄ93=34  =46 95  XÄ4  BXÄ6 96B' 6 97B&94948  XÄ)   <ERÓ95  XÄ4  =598  XÄ98=8 999:B6  BXÄ99: XÄ ER˘4  6  BXÄ9  5; 9=<9	==4  =>4  =?4  =@4  =A4  =B<ERÎ  9C 5F 5D =E=GB6H   'I 3J B6H   'K 3L B6H   'M 3N B6H   'O 3P B)  6  BXÄ9Q  XÄ ER˙ 'R  'S  &B9T 6H   'T 3U B3V 3W  95B 'X 6 9Y  B&B3Z 6H   '[ 3\ B6H   '] 3^ B6H   '_ 3` B6a 9b9c9d'e B9f9g B 9h6i 9jB A9l9m=k)¯=n 9h6i 9oB A 9h6i 9pB A9p9r9s=q9u) )–B=t9v9w6i 9xB'y B3z  '{ )
+ )F ) Ã)!1B 9h6i 9!|B A9~* *  *! *" B=}3  ' Ä )!
+ )" )#∏)$ B'Ç =Å '!É )"
+ )#% )$∏)%- B  '"Ñ )#
+ )$T )%∏)& B ! '#Ö )$
+ )%¡ )&∏)'i B!4"  3#Ü 3$á 3%à &# '(â ))
+ )*r )+i 3,ä B&&# '(ã ))} )*r )+i 3,å B&&# '(ç )) )*r )+d 3,é B&&# '(è ))
+ )*ö )+i 3,ê B&&# '(ë ))} )*ö )+i 3,í B&&# '(ì )) )*ö )+» 3,î B&+& '# ')ï )*
+ )+ ),A 3-ñ 9.óB''$ B'' ')ò * '+ô 9,3&),)B'6'( 9')') '*ö &)*)'*+ B''  X(Ä+( X)Ä+(  ' X)Ä+' 9)1'B)))  6*( 9*)*, '-õ &,-,'-+ B**  X+Ä++ X,Ä++  * X,Ä.* 9,1*B,3,ú 5-ù =û-=ü-=$†-=°-=,¢-2  ÄL- 	tick	rootupdate	draw
+state 	tick update 	draw 
+state 	root  mixed-test.flagrecruit-smoke.flag balance=GM_READY pools=transform GM Open recruit Draw 5 Draw 1 +100000 Next pool Prev pool   ResultsBalance	Pool#OFFLINE GM - 8/30/62 - pity 20	text
+Title 
+Color
+color
+ImageGM Panel Arial.ttf	FontGetBuiltinResourceResourcesVector2referenceResolutionScaleWithScreenSizeScaleModeuiScaleModeCanvasScalerGraphicRaycastersortingOrderScreenSpaceOverlayRenderModerenderModeCanvastypeofAddComponentDontDestroyOnLoadObjectOfflineRecruitGMGameObjectUIUnityEngineCS RPCGetRecruitInfo RPCRecruit ClientReqRecruit heroListRESTORED_HERO_COUNT    GetMoneyById total=WEIGHTED_READY complete=complete GetNextGuaranteedCount CheckMingJiangCanDiscount CheckMingJiangCanFree GetGlobalMinHeroLevelrawsetRecruitComp RecruitComp packageList packageList InitRecruitLoginDatawishListselectListbanCardblacklistmergedPackageIdspackageTypepackageId wishList selectList banCard blacklist mergedPackageIds openTimestamptotaldDrawCount lastDiscountTime lastFreeTime guaranteedCount packageType packageId seasonExchangeTime midCount remainExchangeTime wishGuaranteed selectedselectnextIdcardIDcardTypehistoryinventorybalance	pity
+close*a	readdecoderapidJson
+pcallrrecruit-save.json	openio  4Rates 8/30/62; hero/skill 50/50; gold within 20No usable client poolsnew 	sort count=RARITY_VALUE tostring:	kindipairs
+cardscfg cfg id 
+cards  	kindid quality skills_skillsqualityid 	kindid quality card_idheros_heroscard_typepackage_id	namepackage_package_cardsmoney_idID
+table	typepackage_package
+pairsrecruit-engine.ljbcloadfileassert	timeosrandomseed	mathÄâzÒ˙®∏—∫˝Ÿ«¬ÎÖ◊«˝µÊÃôô≥Ê˝Ò˙®∏—∫ˇ#$$$$$$$$$$$,---------------..........................................///////0111111111111111111112333333333444444444444444444444567:;;;;;;;<<<<<<<=======>>>>>>>???????@@@@@@@AAAAAAAAABBBBBBBBBCCCCCCCCCCCCCCCCCCDDDDDDDDDDDDDDDDD[\\\\\\\\a  πroot  πemit  πE ™pools ©by ®S S S_ Pcfg  Pcards D/ / /_ ,c  ,p ;qs —  _ p    _ c  k 
+ 
+ 
+k v  s £selected òlast ónames ñname ïsave îf çok 
+Hd  H  _ c  key   i p  packages ∫  _ p  c complete 0Ö  _ p  oldMoney Ûrefresh Ìgrant Ïdraw ‡U œUI Œgo Àcanvas 
+¡scaler ∞font †obj üpanel òbg ílabel ätitle ÉpoolText 	zbalance sresult lhitButtons kbutton jupdate iselectPool hvisible +=smoke %testing  ticks testFlag mixedTest tick      `3   2  ÄL   ^^^  
